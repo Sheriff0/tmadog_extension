@@ -10,6 +10,12 @@ var get_script = null;
 
 var NOU_URL = "https://www.nouonline.net";
 
+var dog_win = null;
+var cur_tabid = null;
+
+var client_headers = {};
+var server_headers = {};
+
 function stop(){
 	NOT_STARTED = true;
 	// remove content script
@@ -76,36 +82,107 @@ function handle_click(){
 
 //chrome.browserAction.onClicked.addListener(start);
 
+
+function rewriteHeaders(e) {
+    headers = client_headers;
+    for (var header of e.requestHeaders) {
+	console.log(`Got header ${header.name}`);
+	if (header.name.toLowerCase() in headers) {
+	    console.log(`Changing header '${header.name}' from ${header.value} to ${headers[header.name.toLowerCase()]}`);
+	    header.value = headers[header.name.toLowerCase()];
+	}
+
+	server_headers[header.name] = header.value; 
+    }
+
+    return {"requestHeaders": e.requestHeaders};
+
+}
+
+/*
+Add rewriteUserAgentHeader as a listener to onBeforeSendHeaders,
+only for the target page.
+
+Make it "blocking" so we can modify the headers.
+*/
+
+function listen_on_win(win){
+    dog_win = win;
+    console.log(`window created ${win}`)
+}
+
+function handle_rm(wid)
+{
+    console.log(`A window was removed by user, checking if it"s a dog window`)
+    if (wid == dog_win.id)
+	return serve_msg({"start": true});
+
+}
+
+chrome.windows.onRemoved.addListener(handle_rm);
+
+
+function listen_on_tab(tab){
+    cur_tabid = tab.id;
+    console.log(`tab created ${cur_tabid}`);
+}
+
+
+function clear_cookies_and_createtab(data)
+{
+    return (cookies)=>{
+	for(var i=0; i<cookies.length;i++) {
+	    console.log(cookies[i]);
+
+	    chrome.cookies.remove(
+		{
+		    "url": "https://" + cookies[i].domain  + cookies[i].path,
+		    "name": cookies[i].name,
+		    //"firstPartyDomain": cookies[i].firstPartyDomain,
+		    "storeId": cookies[i].storeId,
+		},
+		(ck)=> console.log(`Removed cookie ${ck.name}`),
+	    );
+	}
+
+	client_headers = ("headers" in data)? data["headers"] : client_headers;
+
+	chrome.webRequest.onBeforeSendHeaders.addListener(
+	    rewriteHeaders,
+	    {
+		"urls": ["<all_urls>"],
+	    },
+	    ["blocking", "requestHeaders"]
+	);
+
+	chrome.windows.create(
+	    {
+		//"allowScriptsToClose": true,
+		"focused": true,
+		"type": "panel",
+		"url": data["url"],
+	    },
+
+	    listen_on_win
+	);
+
+    }
+}
+
 function mkcookies(data){
 
     window.clearTimeout(timeout);
 
-    chrome.cookies.getAll({"domain": data["url"]}, function(cookies) {
-	for(var i=0; i<cookies.length;i++) {
-	    console.log(cookies[i]);
-
-	    chrome.cookies.remove({url: "https://" + cookies[i].domain  + cookies[i].path, name: cookies[i].name});
-	}
-    });
-
-    chrome.windows.create(
-	{
-	    //"allowScriptsToClose": true,
-	    "focused": true,
-	    "type": "normal",
-	    "url": data["url"],
-	},
-
-	function (win){
-	    console.log("window created")
-	}
-    );
+    chrome.cookies.getAll(
+	{},
+	clear_cookies_and_createtab(data),
+	);
 
 }
 
 function looper(){
     console.log("started polling");
-    window.fetch(CLIENT).then((res)=>{
+    window.fetch(CLIENT, {"mode": "no-cors"}).then((res)=>{
 	return res.json();
 
     }).catch((err)=>{
@@ -119,34 +196,56 @@ function looper(){
     });
 }
 
+
 function serve_msg(msg){
     if("cookies" in msg){
+	chrome.cookies.getAll(
+	    {},
+	    send_to_client,
+	);
+
+    }
+
+    if("start" in msg){
 	timeout = window.setInterval(looper, poll_timeout);
 
-	chrome.devtools.network.getHAR(function(har){
-	    harStr = JSON.stringify(har);
-	    params = {
-		"method": "POST",
-		"body": JSON.stringify({
-		    "har": harStr,
-		}),
-
-	    };
-
-	    window.fetch(CLIENT, params);
-	});
-    
     }
 
-    if("start" in msg && NOT_STARTED){
-	start();
-
-    }
-
-    if("end" in msg && !NOT_STARTED){
-	stop();
+    if("end" in msg){
+	window.clearTimeout(timeout);
     }
 }
+
+function send_to_client(cookies)
+{
+    har = {};
+
+    body = {
+	"headers": server_headers,
+	"har": String(cookies),
+    };
+    params = {
+	"method": "POST",
+	"body": JSON.stringify(body),
+	"mode": "no-cors",
+
+    };
+
+    window.fetch(CLIENT, params).then(
+	(res)=>{
+	    console.log("successfully sent data to client");
+	}).catch((err)=> console.log("failed to send data to server"));
+
+    if (dog_win != null){
+	//remove tab
+	chrome.windows.remove(dog_win.id, ()=> console.log(`Removed window`));
+	cur_tabid = null;
+    }
+
+    serve_msg({"start": true});
+
+}
+
 
 chrome.runtime.onConnect.addListener(function(port) {
       port.onMessage.addListener(serve_msg);

@@ -22,10 +22,14 @@
 
     "permissions": [
 	"tabs",
-	"*://*/*",
+	"*://*.127.0.0.1/",
+	"*://*.nouonline.net/",
+	"https://.nouonline.net/",
 	"cookies",
-	"activeTab"
-	],
+	"activeTab",
+	"webRequest",
+	"webRequestBlocking"
+    ],
 
 	"content_scripts": [
 	    {
