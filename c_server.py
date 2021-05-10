@@ -37,7 +37,7 @@ class Queue(collections.deque):
 class DogCookieClient(http.server.HTTPServer):
     def __init__(self, *pargs, **kwargs):
         self.request_queue = collections.deque([]);
-        self.cur = Har(("dummy"));
+        self.cur = Har("dummy");
         super().__init__(*pargs, **kwargs);
 
     def push(self):
@@ -56,16 +56,19 @@ class RequestHandler (http.server.BaseHTTPRequestHandler):
         self.log_req();
         self.send_response (200);
 
-        if self.server.cur.har:
+        if self.server.cur.har != None:
             try:
                 self.server._pop();
                 data = {"cookies": True, "url": "https://www.nouonline.net/"};
+                print("sending new cookie request");
 
             except IndexError:
                 data = {};
         else:
             data = {"cookies": True, "url": "https://www.nouonline.net/"};
+            print("resending previous cookie request");
         
+
         data = json.dumps(data);
 
         self.send_header ('Content-Length', len(data))
@@ -80,12 +83,21 @@ class RequestHandler (http.server.BaseHTTPRequestHandler):
         self.log_req();
         self.send_response (200)
 
-        data = {};
+        data = {"ok": False};
 
-        if not self.server.cur:
-           pdata = json.loads(self.data);
-           self.server.cur.set(pdata["har"]);
-           data["ok"] = True; 
+        if self.server.cur.har == None:
+            try:
+               pdata = json.loads(self.data);
+               if not "har" in pdata:
+                   raise json.decoder.JSONDecodeError();
+
+               print("recieved har, setting...");
+               self.server.cur.set(pdata);
+               data["ok"] = True; 
+
+            except json.decoder.JSONDecodeError:
+                data["ok"] = False; 
+                print('recieved invalid data %s' % (self.data,));
 
         data = json.dumps(data);
 
@@ -99,7 +111,7 @@ class RequestHandler (http.server.BaseHTTPRequestHandler):
 
 
     def log_req (self):
-        print ('''url: %s
+        print ('''\n\nurl: %s
 method: %s
 headers: %a''' % (self.path, self.command, dict (self.headers)))
         
@@ -133,7 +145,9 @@ try:
     hars.append(server.push().wait_set());
 
 except KeyboardInterrupt:
-    server.shutdown();
+    pass;
+
+server.shutdown();
 
 for har in hars:
-    print(har.har)
+    print(har)

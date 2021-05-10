@@ -16,6 +16,8 @@ var cur_tabid = null;
 var client_headers = {};
 var server_headers = {};
 
+var LOOP_READY = true;
+
 function stop(){
 	NOT_STARTED = true;
 	// remove content script
@@ -113,9 +115,12 @@ function listen_on_win(win){
 
 function handle_rm(wid)
 {
-    console.log(`A window was removed by user, checking if it"s a dog window`)
-    if (wid == dog_win.id)
+    console.log(`A window was removed, checking if it"s a dog window`);
+    if (dog_win != null && wid == dog_win.id){
+	dog_win = null;
 	return serve_msg({"start": true});
+    
+    }
 
 }
 
@@ -132,7 +137,6 @@ function clear_cookies_and_createtab(data)
 {
     return (cookies)=>{
 	for(var i=0; i<cookies.length;i++) {
-	    console.log(cookies[i]);
 
 	    chrome.cookies.remove(
 		{
@@ -171,8 +175,6 @@ function clear_cookies_and_createtab(data)
 
 function mkcookies(data){
 
-    window.clearTimeout(timeout);
-
     chrome.cookies.getAll(
 	{},
 	clear_cookies_and_createtab(data),
@@ -180,20 +182,33 @@ function mkcookies(data){
 
 }
 
-function looper(){
+const handle_loop_err = (err)=>{
+    console.log("got err " + String(err));
+    LOOP_READY = true;
+    //timeout = window.setTimeout(looper, poll_timeout);
+
+}
+
+const looper = ()=>{
+   // to make function re-entrant 
+    if (!LOOP_READY)
+	return;
+
+    LOOP_READY = false;
+
     console.log("started polling");
     window.fetch(CLIENT, {"mode": "no-cors"}).then((res)=>{
 	return res.json();
 
-    }).catch((err)=>{
-	console.log("got err " + String(err));
-    }).then((data)=>{
-	if (data && "cookies" in data)
-	    mkcookies(data);
-    }).catch((err)=>{
-	console.log("got err " + String(err));
+    }).catch(handle_loop_err).then((data)=>{
+	if (data && "cookies" in data){
 
-    });
+	    window.clearTimeout(timeout);
+	    mkcookies(data);
+	}
+
+	return handle_loop_err(Error("No valid request found"));
+    }).catch(handle_loop_err);
 }
 
 
@@ -207,6 +222,7 @@ function serve_msg(msg){
     }
 
     if("start" in msg){
+	LOOP_READY = true;
 	timeout = window.setInterval(looper, poll_timeout);
 
     }
@@ -238,11 +254,15 @@ function send_to_client(cookies)
 
     if (dog_win != null){
 	//remove tab
-	chrome.windows.remove(dog_win.id, ()=> console.log(`Removed window`));
-	cur_tabid = null;
+	chrome.windows.remove(dog_win.id, ()=> {
+	    dog_win = null;
+	    cur_tabid = null;
+	    console.log(`Removed window`)
+	    serve_msg({"start": true});
+
+	});
     }
 
-    serve_msg({"start": true});
 
 }
 
