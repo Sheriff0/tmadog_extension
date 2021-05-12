@@ -30,8 +30,10 @@ import nourc
 
 import uuid
 import dropbox
+import c_server
+import threading
 
-VERSION = 1.00;
+VERSION = 2.00;
 GEOMETRY = '400x400+100+100';
 
 CANONICAL_URL = "https://www.nouonline.net";
@@ -493,8 +495,9 @@ Please input a cookie file (e.g from the browser)--> """));
         configparser.ExtendedInterpolation ())
 
     logger.info("reading config file and initializing a webmap");
-    #mstr = libdogs.read_file_text(getattr(args, libdogs.P_WMAP));
-    mp.read_string (nourc.rc);
+    mstr = libdogs.read_file_text(getattr(args, libdogs.P_WMAP));
+    mstr = nourc.rc if not mstr else mstr;
+    mp.read_string (mstr);
 
     setattr(args, libdogs.P_WMAP, mp);
 
@@ -547,6 +550,8 @@ Please input a cookie file (e.g from the browser)--> """));
         stime = time.time();
 
         dog.submit(task);
+        logger.info("checking for suspended jobs for rerun");
+        dog.resume_suspended();
         cleanup();
 
     except KeyboardInterrupt:
@@ -922,43 +927,49 @@ def GuiLogger(scr, logger, cb = None, height = 30, width = 100):
     return _Logger();
 
 
-def gui_getcookie(default = None, attr = None, cb = None):
+def gui_getcookie(default = None, attr = None, cb = None, cookie_client = None):
 
     import tkinter.messagebox, tkinter.filedialog
 
     def _getcookie(nav):
-        print("\n\nCookies have expired. Check the main screen to resolve this.\n\n");
-        res = tkinter.messagebox.askyesnocancel(title = "Cookie File",
-                icon = "question", message = "Cookies needed. Do you want to continue with your previous cookie file", detail = "click no to choose a file, click yes to use previous file. click cancel to exit the program");
+        if not cookie_client:
+            print("\n\nCookies have expired. Check the main screen to resolve this.\n\n");
+            res = tkinter.messagebox.askyesnocancel(title = "Cookie File",
+                    icon = "question", message = "Cookies needed. Do you want to continue with your previous cookie file", detail = "click no to choose a file, click yes to use previous file. click cancel to exit the program");
 
 
-        if res == None:
-            raise KeyboardInterrupt();
+            if res == None:
+                raise KeyboardInterrupt();
 
-        if not res:
-            res = tkinter.filedialog.askopenfilename(title = "Cookie File");
+            if not res:
+                res = tkinter.filedialog.askopenfilename(title = "Cookie File");
 
-        if not res or res == True:
-            if default and not isinstance(default, str) and attr:
-                res = getattr(default, attr);
+            if not res or res == True:
+                if default and not isinstance(default, str) and attr:
+                    res = getattr(default, attr);
 
-            elif default and isinstance(default, str):
-                res = default;
-
-
-        if not res or (not isinstance(res, str) or re.match(r'\s+', res)):
-            return nav;
+                elif default and isinstance(default, str):
+                    res = default;
 
 
-        fi = pathlib.Path(res);
+            if not res or (not isinstance(res, str) or re.match(r'\s+', res)):
+                return nav;
 
-        session = libdogs.session_from_cookies(nav.keys[libdogs.P_URL], str(fi));
+
+            fi = pathlib.Path(res);
+
+            session = libdogs.session_from_cookies(nav.keys[libdogs.P_URL], str(fi));
+
+            if cb and callable(cb):
+                cb(res);
+
+        else:
+            session = libdogs.session_from_cookies(nav.keys[libdogs.P_URL], "",
+                    cookie_client = cookie_client, nav = nav);
 
         if session:
             nav.session = session;
 
-        if cb and callable(cb):
-            cb(res);
 
         return nav;
 
@@ -1032,6 +1043,7 @@ def prep_hypen(args, idx):
 
 def gui_start(parser, pkg_name, logger, *argv, **kwargs):
     wlist_h = kwargs.pop("wlist_h", None);
+    cookie_client = kwargs.pop("cookie_client", None);
     if wlist_h and not dropbox.fetch_keyinfo(str(wlist_h)):
         print("Please renew your package as the current package has expired");
         return False;
@@ -1063,7 +1075,8 @@ def gui_start(parser, pkg_name, logger, *argv, **kwargs):
         else:
             nav = navigation.Navigator(cli[libdogs.P_URL], cli[libdogs.P_WMAP],
                     cli, timeout = REQUEST_TIMEOUT);
-            session = libdogs.session_from_cookies(nav.keys[libdogs.P_URL], args.cookies);
+            session = libdogs.session_from_cookies(nav.keys[libdogs.P_URL],
+                    args.cookies, cookie_client, nav = nav);
             if session:
                 nav.session = session;
 
@@ -1125,8 +1138,10 @@ def gui_start(parser, pkg_name, logger, *argv, **kwargs):
             configparser.ExtendedInterpolation ())
 
         logger.info("reading config file and initializing a webmap");
-        #mstr = libdogs.read_file_text(getattr(args, libdogs.P_WMAP));
-        mp.read_string (nourc.rc);
+        mstr = libdogs.read_file_text(getattr(args, libdogs.P_WMAP));
+
+        mstr = nourc.rc if not mstr else mstr;
+        mp.read_string (mstr);
 
         setattr(args, libdogs.P_WMAP, mp);
 
@@ -1189,8 +1204,8 @@ def gui_start(parser, pkg_name, logger, *argv, **kwargs):
     dog = ndog;
     task = dog._InternalTask(cmd = None, args = args);
     stime = time.time();
-
-    getcookie = gui_getcookie(default = args, attr = "cookies", cb = update_cookie);
+    
+    getcookie = gui_getcookie(default = args, attr = "cookies", cb = update_cookie, cookie_client = cookie_client);
 
     err_handle = unknown_err_handler;
 
@@ -1199,6 +1214,8 @@ def gui_start(parser, pkg_name, logger, *argv, **kwargs):
 
     try:
         dog.submit(task);
+        logger.info("checking for suspended jobs for rerun");
+        dog.resume_suspended();
         cleanup();
 
     except KeyboardInterrupt:
@@ -1250,6 +1267,16 @@ def gui_main(parser, pkg_name, argv = [], kinfo = None):
     logger.addHandler(fatal);
     logger.addHandler(stdout);
 
+    logger.info("initializing a cookie client, please make sure a server is installed on your browser");
+    cookie_client = c_server.DogCookieClient(
+            (c_server.DEFAULT_HOST, c_server.DEFAULT_PORT),
+            c_server.RequestHandler
+            );   
+   
+    threading.Thread(target = cookie_client.serve_forever, daemon = True).start();
+
+    libdogs.init_hooks(cookie_client = cookie_client);
+
     stat_tab = {};
     args = None;
     dog = None;
@@ -1267,7 +1294,7 @@ def gui_main(parser, pkg_name, argv = [], kinfo = None):
             break;
 
         rez = gui_start(parser, pkg_name, logger, *argv, dog = dog,
-                wlist_h = wlist_h);
+                wlist_h = wlist_h, cookie_client = cookie_client);
         if rez:
             dog, args, argv = rez;
 
@@ -1279,6 +1306,7 @@ def gui_main(parser, pkg_name, argv = [], kinfo = None):
                 write_stat_raw(stat_tab, args.stats);
 
     stdscr.destroy();
+    cookie_client.shutdown();
 
 
 

@@ -152,12 +152,12 @@ class SimpleDog:
                 while ldr.nxt:
                     # execute
                     st = self.submit_main(ldr.nxt.args);
-                    if st.code == status.S_FATAL:
+                    if st.code == status.S_FATAL or st.code == status.S_ERROR:
                         ldr.nxt.state = tasker.TS_TERM;
-                    elif st.code == status.S_ERROR:
+                    elif st.code == status.S_INT:
                         ldr.nxt.cmd = self.submit_pre_exec;
                         ldr.nxt.state = tasker.TS_STOPED;
-                    elif st:
+                    else:
                         ldr.nxt.state = tasker.TS_EXITED;
 
                     ldr.nxt.status = st;
@@ -183,12 +183,12 @@ class SimpleDog:
                                 self.nop, args = arg, status = status.Status());
                     # start submiting
                     st = self.submit_main(arg);
-                    if st.code == status.S_FATAL:
+                    if st.code == status.S_FATAL or st.code == status.S_ERROR:
                         mbr.state = tasker.TS_TERM;
-                    elif st.code == status.S_ERROR:
+                    elif st.code == status.S_INT:
                         mbr.cmd = self.submit_pre_exec;
                         mbr.state = tasker.TS_STOPED;
-                    elif st:
+                    else:
                         mbr.state = tasker.TS_EXITED;
 
                     mbr.status = st;
@@ -200,18 +200,34 @@ class SimpleDog:
         else:
             # do the member only
             st = self.submit_main(mbr.args);
-            if st.code == status.S_FATAL:
+            if st.code == status.S_FATAL or st.code == status.S_ERROR:
                 mbr.state = tasker.TS_TERM;
-            elif st.code == status.S_ERROR:
+            elif st.code == status.S_INT:
                 mbr.cmd = self.submit_pre_exec;
                 mbr.state = tasker.TS_STOPED;
-            elif st:
+            else:
                 mbr.state = tasker.TS_EXITED;
 
             mbr.status = st;
             self.status = st;
 
         return self.status;
+
+    def resume_suspended(self):
+        for task in self.tasktab:
+            if task.state != tasker.TS_STOPED:
+                continue;
+
+            st = self.submit_main(task.args);
+            if st.code == status.S_FATAL or st.code == status.S_ERROR:
+                task.state = tasker.TS_TERM;
+            elif st.code == status.S_INT:
+                task.cmd = self.submit_pre_exec;
+                task.state = tasker.TS_STOPED;
+            else:
+                task.state = tasker.TS_EXITED;
+
+            task.status = st;
 
     def submit_main(self, arg):
 

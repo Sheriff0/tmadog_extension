@@ -90,7 +90,7 @@ function rewriteHeaders(e) {
     for (var header of e.requestHeaders) {
 	console.log(`Got header ${header.name}`);
 	if (header.name.toLowerCase() in headers) {
-	    console.log(`Changing header '${header.name}' from ${header.value} to ${headers[header.name.toLowerCase()]}`);
+	    console.log(`    Changing header '${header.name}' from ${header.value} to ${headers[header.name.toLowerCase()]}`);
 	    header.value = headers[header.name.toLowerCase()];
 	}
 
@@ -163,7 +163,7 @@ function clear_cookies_and_createtab(data)
 	    {
 		//"allowScriptsToClose": true,
 		"focused": true,
-		"type": "panel",
+		//"type": "panel",
 		"url": data["url"],
 	    },
 
@@ -234,12 +234,31 @@ function serve_msg(msg){
 
 function send_to_client(cookies)
 {
-    har = {};
+    pcookies = [];
+
+    for(let cook of cookies){
+	pcook = {
+	    "domain": cook.domain,
+	    "name": cook.name,
+	    "value": cook.value,
+	    "path": cook.path,
+	    "rest": {
+		"HttpOnly": cook.httpOnly,
+	    },
+	    "secure": cook.secure,
+	};
+
+	if (!cook.session)
+	    pcook["expires"] = cook.expirationDate;
+
+	pcookies.push(pcook);
+    }
 
     body = {
 	"headers": server_headers,
-	"har": String(cookies),
+	"cookies": pcookies,
     };
+
     params = {
 	"method": "POST",
 	"body": JSON.stringify(body),

@@ -32,6 +32,8 @@ import urllib3
 import time
 import random
 
+CookieClient = None;
+
 copy = copy.copy if sys.implementation.version.minor < 7 else copy.deepcopy 
 
 logger = logging.getLogger('tmadog.libdog');
@@ -506,11 +508,19 @@ def init_hooks(**kwargs):
     if "logger_hook" in kwargs:
         logger = kwargs.pop("logger_hook");
 
+    if "cookie_client" in kwargs:
+        CookieClient = kwargs.pop("cookie_client");
+
     logger.debug("done..");
 
 def need_cookies(nav, res):
-    m = re.search(nav.webmap["events"]["on_cookie"], res.text, flags = re.I |
-            re.S | re.M) or is_Challenge_Request(res);
+    m = False;
+    if nav:
+        m = re.search(nav.webmap["events"]["on_cookie"], res.text, flags = re.I |
+                re.S | re.M);
+    
+    m = is_Challenge_Request(res) if not m else m;
+
     if m:
         logger.debug("cookie needed\n=======\nmessage\n=======\n%s\n========\n\n",
                 res.text[m.start():]);
@@ -685,8 +695,8 @@ def lazy_login(nav, retry = MAX_RETRIES, **kwargs):
             ## will raise if not logged-in
             nav.cache["profile_page"] = lres;
             # to be sure we're truly logged-in
-            nav("qst_page")[:-1];
-            #nav("logout_page")[:-1];
+            nav("qst_page")[:-2];
+            nav("logout_page")[:-1];
 
             logger.info("lazy_login(): sucessfully logged-in %s", nav.keys[P_USR]);
             return nav;
@@ -1150,10 +1160,11 @@ def read_file_text(fi):
     return fbin.decode(encoding = enc["encoding"]);
 
 import user_agents
+import email
 
 ua_gen = iter(user_agents.UA_Header_Generator());
 
-def session_from_cookies (url, cookie_file):
+def session_from_cookies (url, cookie_file, cookie_client = None, nav = None):
     # use a unique string else 'fi' defaults to the current dir which always
     # exists.
 
@@ -1177,24 +1188,56 @@ def session_from_cookies (url, cookie_file):
             "Upgrade-Insecure-Requests",
             ];  
 
-    session = requests.Session ()
+    session = requests.Session ();
 
     cookt = cookie_parse.bake_cookies (cookie_str, url, others = oheaders);
 
     if not cookt:
         logger.info("no cookies found...");
-        session.headers = next(ua_gen);
+        theaders = next(ua_gen);
+        tsession = requests.Session();
+        tsession.headers = theaders;
+
+        res = just_goto_page(tsession, method = "GET", url = url);
+        
+        if not need_cookies(nav, res):
+            session.cookies = tsession.cookies;
+
+        elif cookie_client:
+            #must not fail, atleast for now.
+            logger.info("found a cookie client. begin polling a cookie server");
+            res = just_goto_page(method = "GET", url = url);
+            hdrs = {};
+            if isinstance (res, requests.Response) and "Accept-Encoding" in res.request.headers:
+                # input headers mush be lower-cased
+                hdrs["accept-encoding"] = res.request.headers["Accept-Encoding"];
+                oheaders.append("Accept-Encoding");
+
+            dt = cookie_client.push({
+                "url": url,
+                "headers": hdrs,
+                }).wait_set();
+            session.cookies = dt.get("cookies");
+            theaders = dt.get("headers");
 
     else:
         logger.info("got cookies created by %s", cookt [0]['User-Agent']);
-
-        session.headers = requests.structures.OrderedDict();
-        
-        for hdr in oheaders:
-            if hdr in cookt[0]:
-                session.headers[hdr] = cookt[0][hdr];
+        theaders = cookt[0];
 
         session.cookies = cookt [1]
+        
+    session.headers = requests.structures.OrderedDict();
+    sheaders = email.message.Message();
+
+    for k in theaders:
+        sheaders[k] = theaders[k];
+
+    for hdr in oheaders:
+        if hdr in sheaders:
+            session.headers[hdr] = sheaders[hdr];
+        else:
+            #omit the header altogether
+            session.headers[hdr] = None;
 
 
     return session
@@ -1254,6 +1297,7 @@ def answer_lax(qst, amgr):
         return x;
 
 
+SUBMIT_QUIZ_SUSPEND = -2;
 SUBMIT_RETRY_FETCH = -1;
 
 def submit(nav, sreq, retry = 2, **kwargs):
@@ -1273,6 +1317,9 @@ def submit(nav, sreq, retry = 2, **kwargs):
                 logger.info("libdogs.submit(): checking result successful");
 
                 return xt;
+            
+            elif is_suspendable(nav, res):
+                return status.Status(status.S_INT, "it is suspendable", cause = SUBMIT_QUIZ_SUSPEND);
 
         if retry:
             logger.info(
@@ -1341,6 +1388,23 @@ def is_skippable(nav, usr, qres):
     logger.debug("no skippables found...");
     return False;
 
+
+def is_suspendable(nav, qres):
+    if not isinstance(qres, requests.Response):
+        qres = nav.session.get(nav.keys[P_URL]);
+
+    for tr in nav.webmap["events"]["suspendables"].strip().split(","):
+        mt = re.search(
+                tr.strip(),
+                lxml.html.fromstring(html = qres.text).text_content(),
+                re.I | re.M | re.DOTALL
+                );
+        if mt:
+            logger.debug("suspendable found, please handle");
+            return mt;
+
+    logger.debug("No suspendable found");
+    return False;
 
 
 def is_trap(nav, qres):
@@ -1412,7 +1476,7 @@ def login_needed(nav, qres):
             re.I | re.M | re.DOTALL
             );
 
-def can_retry_fetch(nav, qres):
+def can_retry_fetch(nav, qres, usr):
     if not isinstance(qres, requests.Response):
         qres = nav.session.get(nav.keys[P_URL]);
 
@@ -1538,11 +1602,21 @@ def fetch_all(nav, usr, **kwargs):
         except DogTypeError as err:
             logger.info("fetch_all(): fetch unsucessful");
 
-            st = can_retry_fetch(nav, qres);
-            if st.code == status.S_NULL or is_skippable(nav, usr, qres):
+            st = can_retry_fetch(nav, qres, usr);
+            if st.code == status.S_NULL:
                 logger.info("nothing to fetch");
                 done = True;
                 yield st;
+
+            elif is_skippable(nav, usr, qres):
+                logger.info("nothing to fetch");
+                done = True;
+                yield status.Status(status.S_ERROR, "can be skipped",
+                        qres);
+
+            elif is_suspendable(nav, qres):
+                done = True;
+                yield status.Status(status.S_INT, "it is suspendable", cause = SUBMIT_QUIZ_SUSPEND);
 
             else:
                 logger.info("fetch_all(): retrying fetch");
@@ -1617,11 +1691,23 @@ def fetch_allq(nav, usr, **kwargs):
             yield copy(result);
 
         except DogTypeError as err:
-            st = can_retry_fetch(nav, qres);
-            if st.code == status.S_NULL or is_skippable(nav, usr, qres):
+            st = can_retry_fetch(nav, qres, usr);
+            if st.code == status.S_NULL:
                 logger.info("nothing to fetch");
                 done = True;
                 yield st;
+
+            elif is_skippable(nav, usr, qres):
+                logger.info("nothing to fetch");
+                done = True;
+                yield status.Status(status.S_ERROR, "can be skipped",
+                        qres);
+
+
+            elif is_suspendable(nav, qres):
+                done = True;
+                yield status.Status(status.S_INT, "it is suspendable", cause = SUBMIT_QUIZ_SUSPEND);
+
 
             else:
                 logger.info("fetch_all(): retrying fetch");
@@ -1836,7 +1922,7 @@ def goto_page3(*pargs, **kwargs):
     lres = None;
 
     retry = MAX_RETRIES;
-    while retry:
+    while True:
         try:
             lres = requests.request(*pargs, **kwargs);
             #lres.raise_for_status();
@@ -1864,4 +1950,41 @@ def goto_page3(*pargs, **kwargs):
 
 
     return status.Status(status.S_ERROR, "maximum retries exceeded for sending to server", lres);
+
+
+def just_goto_page(session = requests, *req, **kwargs):
+
+    logger.debug(
+            "just_goto_page: preparing for a pure request, only network issues will be handled"
+            );
+
+    lres = None;
+
+    while True:
+        try:
+            lres = session.request(*req, **kwargs);
+
+            return lres;
+
+        except Exception as err:
+
+            if isinstance(err, (
+                requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.ReadTimeout
+                )) and not isinstance(err.args[0], urllib3.exceptions.MaxRetryError):
+                pass;
+
+            elif isinstance(err, requests.exceptions.RequestException):
+                if not unknown_err_handler_hook(err, lres):
+                    logger.debug("halting...");
+                    return status.Status(status.S_ERROR, "unknown err while sending to server", (lres, err));
+
+
+            else:
+                raise err;
+
+
+    return status.Status(status.S_ERROR, "maximum retries exceeded for sending to server", lres);
+
 

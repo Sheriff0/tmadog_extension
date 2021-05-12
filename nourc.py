@@ -4,6 +4,7 @@ rumbu = tqatri
 xstore = trextri
 
 [events]
+suspendables = TMA\W+COMING\W+SOON!
 crs_skip = GST
 page_skip = not\W+yet\W+ready\W+for,Contact\W+\[email\Wprotected\],VISIT\W+NOUN\W+GST\W+PAGE
 traps = not\W+ready\W+for\W+now 
@@ -43,9 +44,9 @@ requires = profile_page
 volatile =
 
 [qst_page]
-path = TMA[1-3]
-indices = 0
-requires = tma_page
+path = Take TMA,TMA[1-3]
+indices = 0,0
+requires = profile_page
 volatile = logout_page
 
 [tma_page]
