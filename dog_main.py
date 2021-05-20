@@ -997,8 +997,47 @@ def iter_file_argv(argf):
     for arg_line in args.split("\n"):
         if not re.match(r'^\s*#.*', arg_line):
             ar = arg_line.split();
+            if not ar:
+                continue;
             for a1 in ar:
                 yield a1;
+
+
+def gui_iter_file_argv(argf):
+    args = libdogs.read_file_text(argf);
+    for arg_line in args.split("\n"):
+        if not re.match(r'^\s*#.*', arg_line):
+            # to force a line-based tmafile where username and password are on
+            # the same line, delimited by one space. Any other space afterwards
+            # is considered part of the pass
+            aline = arg_line.split();
+            if not aline:
+                continue;
+            ar = [];
+            ar.append(aline[0]);
+            ar.append(" ".join(aline[1:]));
+            for a1 in ar:
+                yield a1;
+
+
+
+def gui_collapse_file_argv(parser, argv, preproc = lambda a,b: a):
+    aid = parser.fromfile_prefix_chars;
+    if not aid:
+        return [];
+
+    arg_res = [];
+    rest = [];
+
+    for arg in argv:
+        if not isinstance(arg, str) or not arg.startswith(aid):
+            rest.append(arg);
+            continue;
+
+        ar = gui_iter_file_argv(arg[1:]);
+        arg_res.extend(preproc(ar, 0));
+
+    return (arg_res, rest);
 
 
 
@@ -1060,7 +1099,7 @@ def gui_start(parser, pkg_name, logger, *argv, **kwargs):
 
         aid = parser.fromfile_prefix_chars if parser.fromfile_prefix_chars else "";
 
-        argr, rest = collapse_file_argv(parser, argv, prep_hypen);
+        argr, rest = gui_collapse_file_argv(parser, argv, prep_hypen);
         argr.extend(rest);
 
         args,ex = parser.parse_known_args(argr);

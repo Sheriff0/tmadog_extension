@@ -6,7 +6,7 @@ xstore = trextri
 [events]
 suspendables = TMA\W+COMING\W+SOON!
 crs_skip = GST
-page_skip = not\W+yet\W+ready\W+for,Contact\W+\[email\Wprotected\],VISIT\W+NOUN\W+GST\W+PAGE
+page_skip = not\W+yet\W+ready\W+for,Contact\W+\[email\Wprotected\],VISIT\W+NOUN\W+GST\W+PAGE,Please\W+try\W+again\W+NX
 traps = not\W+ready\W+for\W+now 
 on_qst_submit = mark\W+for\W+question
 on_complete = You\W+have\W+already\W+complete
