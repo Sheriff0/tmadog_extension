@@ -71,8 +71,10 @@ class AppendList(argparse.Action):
 
 
 class DogCmdParser(argparse.ArgumentParser):
+
     def convert_arg_line_to_args(self, arg_line):
         return arg_line.split() if not re.match(r'^\s*#.*', arg_line) else [];
+
 
 def is_Challenge_Request(resp):
     return cloudscraper.CloudScraper.is_Firewall_Blocked(resp) or cloudscraper.CloudScraper.is_New_Captcha_Challenge(resp) or cloudscraper.CloudScraper.is_New_IUAM_Challenge(resp) or cloudscraper.CloudScraper.is_Captcha_Challenge(resp) or cloudscraper.CloudScraper.is_IUAM_Challenge(resp);

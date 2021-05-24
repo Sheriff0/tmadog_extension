@@ -44,6 +44,26 @@ CHK_QUIT = False;
 CHK_FAIL = None;
 CHK_SUCCESS = dropbox.KeyInfo;
 
+
+ARGNAME_MATNO = ('--matno',);
+ARGNAME_PWD = ('--pwd',);
+ARGNAME_CRSCODE = ('--crscode',);
+ARGNAME_TMA = ('--tma',);
+ARGNAME_CONFIG = ('--config',);
+ARGNAME_DEBUG = ('--debug',);
+ARGNAME_QSTDUMP = ('--qstdump',);
+ARGNAME_DATABASE = ('--database', '-db');
+ARGNAME_NOUPDATEDB = ('--noupdatedb', '-nodb');
+ARGNAME_URL = ('--url',);
+ARGNAME_COOKIES = ('--cookies',);
+ARGNAME_OUTPUT = ('--output',);
+ARGNAME_STATS = ('--stats', '--summary');
+ARGNAME_PAGE = ('--page-cache',);
+ARGNAME_OVERWRITE = ("--overwrite",);
+ARGNAME_CACHE = ("--cache-first",);
+ARGNAME_EXCLUDE = ("--exclude",);
+
+
 def getkey(retry = False):
 
     user_key = None;
@@ -369,6 +389,8 @@ def main (parser, pkg_name, argv, kinfo = None):
 
     pkg_dir = pkg_name if pkg_name.is_dir() else pkg_name.parent;
 
+    mp = None;
+
     wlist_h = Wlist_Handler(kinfo, lpath = str(pkg_dir.resolve()));
 
     logger = logging.getLogger('tmadog');
@@ -393,10 +415,15 @@ def main (parser, pkg_name, argv, kinfo = None):
     logger.addHandler(fatal);
     logger.addHandler(stdout);
 
-    argv, rest = collapse_file_argv(parser, argv, prep_hypen);
+    mp, argv = get_config(pkg_dir, argv, logger);
+    argv, rest = collapse_file_argv(parser, argv, prep_hypen, recs =
+                mp["tmafile"]["units"].strip().split(","));
+
     argv.extend(rest);
 
     args = parser.parse_args(argv);
+
+    setattr(args, libdogs.P_WMAP, mp);
 
     lastcookie = args.cookies;
 
@@ -486,20 +513,6 @@ Please input a cookie file (e.g from the browser)--> """));
         logger.info("no stat file given, setting default stat file");
         setattr(args, "stats", str(pkg_dir.joinpath("dog.stat.txt")));
 
-
-    if not getattr(args, libdogs.P_WMAP):
-        logger.info("no config file given, setting default config file for webmap");
-        setattr(args, libdogs.P_WMAP, str(pkg_dir.joinpath("nourc")));
-
-    mp = configparser.ConfigParser (interpolation =
-        configparser.ExtendedInterpolation ())
-
-    logger.info("reading config file and initializing a webmap");
-    mstr = libdogs.read_file_text(getattr(args, libdogs.P_WMAP));
-    mstr = nourc.rc if not mstr else mstr;
-    mp.read_string (mstr);
-
-    setattr(args, libdogs.P_WMAP, mp);
 
     if not args.database:
         logger.info("no database file given, setting default database file for webmap");
@@ -630,13 +643,13 @@ def gui_get_argv(pscr, parser, *pargs):
 
     psr = libdogs.DogCmdParser ();
 
-    psr.add_argument ('--tma', nargs = "+", action = libdogs.AppendList, default = ["1"]);
+    psr.add_argument (*ARGNAME_TMA, nargs = "+", action = libdogs.AppendList, default = ["1"]);
 
-    psr.add_argument ('--url', nargs = "+", action = libdogs.AppendList, default = ["https://www.nouonline.net"]);
+    psr.add_argument (*ARGNAME_URL, nargs = "+", action = libdogs.AppendList, default = ["https://www.nouonline.net"]);
 
-    psr.add_argument ('--cookies');
+    psr.add_argument (*ARGNAME_COOKIES);
 
-    psr.add_argument ('--crscode', nargs = "+", action = libdogs.AppendList);
+    psr.add_argument (*ARGNAME_CRSCODE, nargs = "+", action = libdogs.AppendList);
 
     exit = tkinter.StringVar();
 
@@ -780,19 +793,19 @@ def gui_get_argv(pscr, parser, *pargs):
 
     def _ready():
         nonlocal ready, scr;
-        argrv = ["--url", url["val"].get()];
+        argrv = [ARGNAME_URL[0], url["val"].get()];
 
         if tma["val"].get() != tma["list"][-1]:
-            argrv.extend(["--tma", tma["val"].get()]);
+            argrv.extend([ARGNAME_TMA[0], tma["val"].get()]);
 
         if crscode["val"].get() != crscode["list"][-1]:
-            argrv.extend(["--crscode", crscode["val"].get()]);
+            argrv.extend([ARGNAME_CRSCODE[0], crscode["val"].get()]);
         else:
             if args.crscode:
-                argrv.extend(["--crscode"]);
+                argrv.extend([ARGNAME_CRSCODE[0]]);
                 argrv.extend(args.crscode);
 
-        argrv.extend(["--cookies", cookies["val"].get()]);
+        argrv.extend([ARGNAME_COOKIES[0], cookies["val"].get()]);
 
         argrv.append("%s%s" % (parser.fromfile_prefix_chars, f_args["val"].get()));
         rest.extend(argrv);
@@ -991,16 +1004,66 @@ def unknown_err_handler(err, *pargs):
         raise KeyboardInterrupt();
 
 
+def get_config(pkg_dir, argv, logger = None):
+    psr = libdogs.DogCmdParser();
+    psr.add_argument (*ARGNAME_CONFIG, default = str(pkg_dir.joinpath("nourc")), dest = "rc");
 
-def iter_file_argv(argf):
+    args,rest = psr.parse_known_args(argv);
+
+    dmp = configparser.ConfigParser (interpolation =
+        configparser.ExtendedInterpolation ());
+
+    if logger:
+        logger.info("reading config file and initializing a webmap");
+
+    mstr = libdogs.read_file_text(getattr(args, "rc"));
+
+    dstr = nourc.rc;
+
+    dmp.read_string (dstr);
+
+    if mstr:
+        mp = configparser.ConfigParser (interpolation =
+            configparser.ExtendedInterpolation ());
+
+        mp.read_string (mstr);
+    
+        dmp.update(mp);
+
+    return (dmp, rest);
+
+
+def iter_file_argv(argf, fprefs = []):
     args = libdogs.read_file_text(argf);
     for arg_line in args.split("\n"):
-        if not re.match(r'^\s*#.*', arg_line):
-            ar = arg_line.split();
-            if not ar:
-                continue;
-            for a1 in ar:
-                yield a1;
+        if re.match(r'^\s*#.*', arg_line):
+            continue;
+
+        ar = arg_line.split();
+        # on a line, tokens with recognized prefixes are given as a unit
+        # while those without are given as a space-seperated collection.
+        lbuf = [];
+        if not ar:
+            # empty lines are skipped
+            continue;
+
+        for a1 in ar:
+            # NOTE: this implementation though
+            for pref in fprefs:
+                if re.match(pref, a1, re.I):
+                    if lbuf:
+                        yield " ".join(lbuf);
+                    yield a1;
+                    a1 = None;
+                    lbuf = [];
+                    break;
+            
+            if a1:
+                lbuf.append(a1);
+                
+        if lbuf:
+            # the whole of the line as oneunit
+            yield " ".join(lbuf);
 
 
 def gui_iter_file_argv(argf):
@@ -1041,7 +1104,7 @@ def gui_collapse_file_argv(parser, argv, preproc = lambda a,b: a):
 
 
 
-def collapse_file_argv(parser, argv, preproc = lambda a,b: a):
+def collapse_file_argv(parser, argv, preproc = lambda a,b: a,  recs = []):
     aid = parser.fromfile_prefix_chars;
     if not aid:
         return [];
@@ -1054,7 +1117,7 @@ def collapse_file_argv(parser, argv, preproc = lambda a,b: a):
             rest.append(arg);
             continue;
 
-        ar = iter_file_argv(arg[1:]);
+        ar = iter_file_argv(arg[1:], recs);
         arg_res.extend(preproc(ar, 0));
 
     return (arg_res, rest);
@@ -1093,16 +1156,22 @@ def gui_start(parser, pkg_name, logger, *argv, **kwargs):
 
     args = kwargs.pop("args", None);
     dog = kwargs.pop("dog", None);
+    mp = None;
 
     if not args:
         logger.info("Welcome to TMADOG version %s\n" % (VERSION,));
 
         aid = parser.fromfile_prefix_chars if parser.fromfile_prefix_chars else "";
 
-        argr, rest = gui_collapse_file_argv(parser, argv, prep_hypen);
+        mp, argv = get_config(pkg_dir, argv, logger);
+
+        argr, rest = collapse_file_argv(parser, argv, prep_hypen, recs =
+                mp["tmafile"]["units"].strip().split(","));
+
         argr.extend(rest);
 
         args,ex = parser.parse_known_args(argr);
+        setattr(args, libdogs.P_WMAP, mp);
 
 
     def get_nav(cli):
@@ -1164,27 +1233,13 @@ def gui_start(parser, pkg_name, logger, *argv, **kwargs):
                 );
 
 
+
     if not getattr(args, "stats"):
         logger.info("no stat file given, setting default stat file");
         setattr(args, "stats", str(pkg_dir.joinpath("dog.stat.txt")));
 
 
-    if not getattr(args, libdogs.P_WMAP):
-       #logger.info("no config file given, setting default config file for webmap");
-        setattr(args, libdogs.P_WMAP, str(pkg_dir.joinpath("nourc")));
 
-        mp = configparser.ConfigParser (interpolation =
-            configparser.ExtendedInterpolation ())
-
-        logger.info("reading config file and initializing a webmap");
-        mstr = libdogs.read_file_text(getattr(args, libdogs.P_WMAP));
-
-        mstr = nourc.rc if not mstr else mstr;
-        mp.read_string (mstr);
-
-        setattr(args, libdogs.P_WMAP, mp);
-
-    mp = getattr(args, libdogs.P_WMAP);
 
     if not args.database:
         logger.info("no database file given, setting default database file for webmap");
@@ -1354,47 +1409,47 @@ if __name__ == '__main__':
 
     parser = libdogs.DogCmdParser (fromfile_prefix_chars='¥');
 
-    parser.add_argument ('--matno', help = 'Your Matric Number', nargs = "+",
+    parser.add_argument (*ARGNAME_MATNO, help = 'Your Matric Number', nargs = "+",
             action = libdogs.AppendList, dest = libdogs.P_USR, required = True);
 
-    parser.add_argument ('--pwd', help = 'Your password', nargs = "+", action =
+    parser.add_argument (*ARGNAME_PWD, help = 'Your password', nargs = "+", action =
             libdogs.AppendList, dest = libdogs.P_PWD, required = True);
 
-    parser.add_argument ('--crscode', help = 'Your target course', nargs = "+",
+    parser.add_argument (*ARGNAME_CRSCODE, help = 'Your target course', nargs = "+",
             action = libdogs.AppendList, dest = libdogs.P_CRSCODE);
 
-    parser.add_argument ('--tma', nargs = "+", help = 'Your target TMA for the chosen course',
+    parser.add_argument (*ARGNAME_TMA, nargs = "+", help = 'Your target TMA for the chosen course',
             action = libdogs.AppendList, dest = libdogs.P_TMA, type = int,
             required = True);
 
-    parser.add_argument ('--config', help = 'configuration file to use', dest = libdogs.P_WMAP);
+    parser.add_argument (*ARGNAME_CONFIG, help = 'configuration file to use', dest = libdogs.P_WMAP);
 
-    parser.add_argument ('--debug', action = 'store_true', help = 'To enable debug mode')
+    parser.add_argument (*ARGNAME_DEBUG, action = 'store_true', help = 'To enable debug mode')
 
-    parser.add_argument ('--qstdump', default = 'dumpqst.json', help = 'The dump file for questions')
+    parser.add_argument (*ARGNAME_QSTDUMP, default = 'dumpqst.json', help = 'The dump file for questions')
 
-    parser.add_argument ('--database', '-db', help = 'The database to use')
+    parser.add_argument (*ARGNAME_DATABASE, help = 'The database to use')
 
-    parser.add_argument ('--noupdatedb', '-nodb', action = 'store_false', dest = 'updatedb', default = True, help = 'Update the database in use')
+    parser.add_argument (*ARGNAME_NOUPDATEDB, action = 'store_false', dest = 'updatedb', default = True, help = 'Update the database in use')
 
-    parser.add_argument ('--url', help = 'The remote url if no local server', action = libdogs.AppendList, required = True, dest = libdogs.P_URL)
+    parser.add_argument (*ARGNAME_URL, help = 'The remote url if no local server', action = libdogs.AppendList, required = True, dest = libdogs.P_URL)
 
 
-    parser.add_argument ('--cookies', help = 'Website cookies');
+    parser.add_argument (*ARGNAME_COOKIES, help = 'Website cookies');
 
-    parser.add_argument ('--output', help = "output file format");
+    parser.add_argument (*ARGNAME_OUTPUT, help = "output file format");
 
-    parser.add_argument ('--stats', '--summary', help = 'where to write a summary of a run to', dest = "stats");
+    parser.add_argument (*ARGNAME_STATS, help = 'where to write a summary of a run to', dest = "stats");
 
-    parser.add_argument ('--page-cache', help = 'where to write cached pages',
+    parser.add_argument (*ARGNAME_PAGE, help = 'where to write cached pages',
             dest = "cache");
 
-    parser.add_argument("--overwrite", action = "store_true", help = "always update cached pages");
+    parser.add_argument(*ARGNAME_OVERWRITE, action = "store_true", help = "always update cached pages");
 
-    parser.add_argument("--cache-first", action = "store_true",
+    parser.add_argument(*ARGNAME_CACHE, action = "store_true",
             help = "check cached pages before any remote request for the page - not all cached pages will be used.");
 
-    parser.add_argument("--exclude", action = libdogs.AppendList, help =
+    parser.add_argument(*ARGNAME_EXCLUDE, action = libdogs.AppendList, help =
             "course codes to exclude e.g for NOUN students GST", nargs = "+");
 
     qk_psr = argparse.ArgumentParser();
